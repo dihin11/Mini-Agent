@@ -36,6 +36,14 @@ class AgentConfig(BaseModel):
     system_prompt_path: str = "system_prompt.md"
 
 
+class AgentsConfig(BaseModel):
+    """Sub-agents configuration"""
+
+    directory: str = "agents"
+    auto_discover: bool = True
+    max_depth: int = 1  # Prevent recursive calls (1 = no nesting)
+
+
 class ToolsConfig(BaseModel):
     """Tools configuration"""
 
@@ -51,6 +59,10 @@ class ToolsConfig(BaseModel):
     # MCP tools
     enable_mcp: bool = True
     mcp_config_path: str = "mcp.json"
+
+    # Sub-agents
+    enable_agents: bool = False
+    agents: AgentsConfig = Field(default_factory=AgentsConfig)
 
 
 class Config(BaseModel):
@@ -118,6 +130,15 @@ class Config(BaseModel):
 
         # Parse tools configuration
         tools_data = data.get("tools", {})
+        
+        # Parse sub-agents configuration
+        agents_data = tools_data.get("agents", {})
+        agents_config = AgentsConfig(
+            directory=agents_data.get("directory", "agents"),
+            auto_discover=agents_data.get("auto_discover", True),
+            max_depth=agents_data.get("max_depth", 1),
+        )
+        
         tools_config = ToolsConfig(
             enable_file_tools=tools_data.get("enable_file_tools", True),
             enable_bash=tools_data.get("enable_bash", True),
@@ -126,6 +147,8 @@ class Config(BaseModel):
             skills_dir=tools_data.get("skills_dir", "./skills"),
             enable_mcp=tools_data.get("enable_mcp", True),
             mcp_config_path=tools_data.get("mcp_config_path", "mcp.json"),
+            enable_agents=tools_data.get("enable_agents", False),
+            agents=agents_config,
         )
 
         return cls(

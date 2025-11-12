@@ -16,8 +16,11 @@ class AgentLogger:
     - Tool calls and results
     """
 
-    def __init__(self):
+    def __init__(self, prefix: str = ""):
         """Initialize logger
+
+        Args:
+            prefix: Optional prefix for log filename (e.g., "sub_agent_name_")
 
         Logs are stored in ~/.mini-agent/log/ directory
         """
@@ -26,11 +29,12 @@ class AgentLogger:
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.log_file = None
         self.log_index = 0
+        self.prefix = prefix
 
     def start_new_run(self):
         """Start new run, create new log file"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_filename = f"agent_run_{timestamp}.log"
+        log_filename = f"agent_run_{self.prefix}{timestamp}.log"
         self.log_file = self.log_dir / log_filename
         self.log_index = 0
 

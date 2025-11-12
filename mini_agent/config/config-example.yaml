@@ -49,3 +49,10 @@ tools:
   enable_mcp: true         # Enable MCP tools
   mcp_config_path: "mcp.json"  # MCP configuration file (same config directory)
                            # Note: API Keys for MCP tools are configured in mcp.json
+  
+  # Sub-Agents
+  enable_agents: false     # Enable sub-agent system
+  agents:
+    directory: "agents"    # Directory containing agent definition files (*.md)
+    auto_discover: true    # Automatically discover agents in directory
+    max_depth: 1           # Maximum call depth (1 = no recursive calls)

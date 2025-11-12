@@ -26,7 +26,9 @@ from mini_agent.agent import Agent
 from mini_agent.config import Config
 from mini_agent.llm import LLMClient
 from mini_agent.tools.base import Tool
+from mini_agent.tools.agent_loader import AgentLoader
 from mini_agent.tools.bash_tool import BashTool, BashKillTool, BashOutputTool
+from mini_agent.tools.call_agent_tool import CallAgentTool
 from mini_agent.tools.file_tools import EditTool, ReadTool, WriteTool
 from mini_agent.tools.mcp_loader import cleanup_mcp_connections, load_mcp_tools_async
 from mini_agent.tools.note_tool import SessionNoteTool
@@ -271,7 +273,7 @@ async def initialize_base_tools(config: Config):
     return tools, skill_loader
 
 
-def add_workspace_tools(tools: List[Tool], config: Config, workspace_dir: Path):
+def add_workspace_tools(tools: List[Tool], config: Config, workspace_dir: Path, llm_client=None):
     """Add workspace-dependent tools
 
     These tools need to know the workspace directory.
@@ -280,9 +282,15 @@ def add_workspace_tools(tools: List[Tool], config: Config, workspace_dir: Path):
         tools: Existing tools list to add to
         config: Configuration object
         workspace_dir: Workspace directory path
+        llm_client: LLM client (required for sub-agents)
+
+    Returns:
+        AgentLoader if agents enabled, None otherwise
     """
     # Ensure workspace directory exists
     workspace_dir.mkdir(parents=True, exist_ok=True)
+    
+    agent_loader = None
 
     # File tools - need workspace to resolve relative paths
     if config.tools.enable_file_tools:
@@ -299,6 +307,35 @@ def add_workspace_tools(tools: List[Tool], config: Config, workspace_dir: Path):
     if config.tools.enable_note:
         tools.append(SessionNoteTool(memory_file=str(workspace_dir / ".agent_memory.json")))
         print(f"{Colors.GREEN}✅ Loaded session note tool{Colors.RESET}")
+    
+    # Sub-agents - needs workspace and llm_client
+    if config.tools.enable_agents and llm_client:
+        agents_dir = config.tools.agents.directory
+        agent_loader = AgentLoader(agents_dir=agents_dir)
+        
+        # Discover agents
+        if config.tools.agents.auto_discover:
+            discovered = agent_loader.discover_agents()
+            if discovered:
+                print(f"{Colors.GREEN}✅ Discovered {len(discovered)} sub-agent(s) from {agents_dir}/{Colors.RESET}")
+                for agent_def in discovered:
+                    print(f"{Colors.DIM}   • {agent_def.name}: {agent_def.description}{Colors.RESET}")
+                
+                # Add CallAgentTool
+                call_agent_tool = CallAgentTool(
+                    agent_loader=agent_loader,
+                    llm_client=llm_client,
+                    all_tools=tools,  # Pass current tools for filtering
+                    workspace_dir=str(workspace_dir),
+                    call_depth=0,
+                    max_depth=config.tools.agents.max_depth,
+                )
+                tools.append(call_agent_tool)
+                print(f"{Colors.GREEN}✅ Loaded call_agent tool{Colors.RESET}")
+            else:
+                print(f"{Colors.YELLOW}⚠️  No agents found in {agents_dir}/{Colors.RESET}")
+    
+    return agent_loader
 
 
 async def run_agent(workspace_dir: Path):
@@ -389,8 +426,8 @@ async def run_agent(workspace_dir: Path):
     # 3. Initialize base tools (independent of workspace)
     tools, skill_loader = await initialize_base_tools(config)
 
-    # 4. Add workspace-dependent tools
-    add_workspace_tools(tools, config, workspace_dir)
+    # 4. Add workspace-dependent tools (including sub-agents)
+    agent_loader = add_workspace_tools(tools, config, workspace_dir, llm_client)
 
     # 5. Load System Prompt (with priority search)
     system_prompt_path = Config.find_config_file(config.agent.system_prompt_path)
@@ -416,6 +453,15 @@ async def run_agent(workspace_dir: Path):
     else:
         # Remove placeholder if skills not enabled
         system_prompt = system_prompt.replace("{SKILLS_METADATA}", "")
+    
+    # 6b. Inject Sub-Agents Metadata into System Prompt
+    if agent_loader:
+        agents_metadata = agent_loader.get_agents_metadata_prompt()
+        if agents_metadata:
+            system_prompt = system_prompt + "\n\n" + agents_metadata
+            print(
+                f"{Colors.GREEN}✅ Injected {len(agent_loader.loaded_agents)} sub-agent(s) metadata into system prompt{Colors.RESET}"
+            )
 
     # 7. Create Agent
     agent = Agent(
