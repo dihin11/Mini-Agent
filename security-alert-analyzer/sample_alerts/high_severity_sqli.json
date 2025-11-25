@@ -1,0 +1,19 @@
+{
+  "alert_id": "ALR-2025-001234",
+  "timestamp": "2025-11-25T10:30:00Z",
+  "severity": "high",
+  "attacker_ip": "103.65.236.149",
+  "victim_ip": "118.24.228.103",
+  "attack_type": "sql_injection",
+  "payload": "' OR '1'='1' --",
+  "protocol": "HTTPS",
+  "destination_port": 443,
+  "source_port": 54321,
+  "additional_context": {
+    "url": "/api/login",
+    "method": "POST",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "request_body": "username=admin' OR '1'='1' --&password=anypass"
+  },
+  "description": "检测到针对登录接口的 SQL 注入攻击尝试"
+}

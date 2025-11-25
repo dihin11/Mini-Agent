@@ -1,0 +1,19 @@
+{
+  "alert_id": "ALR-2025-001235",
+  "timestamp": "2025-11-25T11:15:00Z",
+  "severity": "medium",
+  "attacker_ip": "198.51.100.50",
+  "victim_ip": "10.0.2.100",
+  "attack_type": "port_scan",
+  "payload": "TCP SYN scan on ports: 22, 80, 443, 3306, 5432, 8080",
+  "protocol": "TCP",
+  "destination_port": "multiple",
+  "source_port": "random",
+  "additional_context": {
+    "scanned_ports": [22, 80, 443, 3306, 5432, 8080, 8443, 9200],
+    "scan_duration": "120 seconds",
+    "packets_sent": 48,
+    "scan_pattern": "sequential"
+  },
+  "description": "检测到来自可疑 IP 的端口扫描活动"
+}

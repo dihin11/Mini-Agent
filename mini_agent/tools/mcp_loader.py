@@ -8,6 +8,21 @@ from typing import Any
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+# Optional imports for URL-based transports
+try:
+    from mcp.client.sse import sse_client
+    SSE_AVAILABLE = True
+except ImportError:
+    SSE_AVAILABLE = False
+    sse_client = None
+
+try:
+    from mcp.client.websocket import websocket_client
+    WEBSOCKET_AVAILABLE = True
+except ImportError:
+    WEBSOCKET_AVAILABLE = False
+    websocket_client = None
+
 from .base import Tool, ToolResult
 
 
@@ -71,11 +86,23 @@ class MCPTool(Tool):
 class MCPServerConnection:
     """Manages connection to a single MCP server."""
 
-    def __init__(self, name: str, command: str, args: list[str], env: dict[str, str] | None = None):
+    def __init__(
+        self,
+        name: str,
+        transport: str = "stdio",
+        command: str | None = None,
+        args: list[str] | None = None,
+        env: dict[str, str] | None = None,
+        url: str | None = None,
+        headers: dict[str, str] | None = None,
+    ):
         self.name = name
+        self.transport = transport.lower()
         self.command = command
-        self.args = args
+        self.args = args or []
         self.env = env or {}
+        self.url = url
+        self.headers = headers or {}
         self.session: ClientSession | None = None
         self.exit_stack: AsyncExitStack | None = None
         self.tools: list[MCPTool] = []
@@ -83,19 +110,74 @@ class MCPServerConnection:
     async def connect(self) -> bool:
         """Connect to the MCP server using proper async context management."""
         try:
-            server_params = StdioServerParameters(
-                command=self.command,
-                args=self.args,
-                env=self.env if self.env else None
-            )
-
             # Use AsyncExitStack to properly manage multiple async context managers
             self.exit_stack = AsyncExitStack()
             
-            # Enter stdio client context
-            read_stream, write_stream = await self.exit_stack.enter_async_context(
-                stdio_client(server_params)
-            )
+            # Create appropriate client based on transport type
+            if self.transport == "stdio":
+                if not self.command:
+                    raise ValueError(f"Command is required for stdio transport (server: {self.name})")
+                
+                server_params = StdioServerParameters(
+                    command=self.command,
+                    args=self.args,
+                    env=self.env if self.env else None
+                )
+                read_stream, write_stream = await self.exit_stack.enter_async_context(
+                    stdio_client(server_params)
+                )
+                
+            elif self.transport == "sse":
+                if not SSE_AVAILABLE:
+                    raise ImportError(
+                        f"SSE transport not available for server '{self.name}'. "
+                        "Please install with: pip install 'mcp[sse]' or upgrade mcp package."
+                    )
+                if not self.url:
+                    raise ValueError(f"URL is required for SSE transport (server: {self.name})")
+                
+                result = await self.exit_stack.enter_async_context(
+                    sse_client(url=self.url, headers=self.headers)
+                )
+                # SSE client returns (read, write) or (read, write, cleanup)
+                if isinstance(result, tuple):
+                    if len(result) == 2:
+                        read_stream, write_stream = result
+                    elif len(result) == 3:
+                        read_stream, write_stream, _ = result
+                    else:
+                        raise ValueError(f"Unexpected SSE client result: {result}")
+                else:
+                    raise ValueError(f"Unexpected SSE client result type: {type(result)}")
+                    
+            elif self.transport in ["http", "websocket", "ws"]:
+                if not WEBSOCKET_AVAILABLE:
+                    raise ImportError(
+                        f"WebSocket transport not available for server '{self.name}'. "
+                        "Please upgrade mcp package to a version that supports WebSocket."
+                    )
+                if not self.url:
+                    raise ValueError(f"URL is required for WebSocket transport (server: {self.name})")
+                
+                result = await self.exit_stack.enter_async_context(
+                    websocket_client(url=self.url, headers=self.headers)
+                )
+                # WebSocket client returns (read, write) or (read, write, cleanup)
+                if isinstance(result, tuple):
+                    if len(result) == 2:
+                        read_stream, write_stream = result
+                    elif len(result) == 3:
+                        read_stream, write_stream, _ = result
+                    else:
+                        raise ValueError(f"Unexpected WebSocket client result: {result}")
+                else:
+                    raise ValueError(f"Unexpected WebSocket client result type: {type(result)}")
+                    
+            else:
+                raise ValueError(
+                    f"Unsupported transport type '{self.transport}' for server '{self.name}'. "
+                    "Use 'stdio', 'sse', or 'websocket'/'ws'"
+                )
             
             # Enter client session context
             session = await self.exit_stack.enter_async_context(
@@ -122,14 +204,14 @@ class MCPServerConnection:
                 )
                 self.tools.append(mcp_tool)
 
-            print(f"✓ Connected to MCP server '{self.name}' - loaded {len(self.tools)} tools")
+            print(f"✓ Connected to MCP server '{self.name}' ({self.transport}) - loaded {len(self.tools)} tools")
             for tool in self.tools:
                 desc = tool.description[:60] if len(tool.description) > 60 else tool.description
                 print(f"  - {tool.name}: {desc}...")
             return True
 
         except Exception as e:
-            print(f"✗ Failed to connect to MCP server '{self.name}': {e}")
+            print(f"✗ Failed to connect to MCP server '{self.name}' ({self.transport}): {e}")
             # Clean up exit stack if connection failed
             if self.exit_stack:
                 await self.exit_stack.aclose()
@@ -141,10 +223,20 @@ class MCPServerConnection:
     async def disconnect(self):
         """Properly disconnect from the MCP server."""
         if self.exit_stack:
-            # AsyncExitStack handles all cleanup properly
-            await self.exit_stack.aclose()
-            self.exit_stack = None
-            self.session = None
+            try:
+                # AsyncExitStack handles all cleanup properly
+                await self.exit_stack.aclose()
+            except RuntimeError as e:
+                # Ignore "Attempted to exit cancel scope in a different task" errors
+                # This can happen during program shutdown
+                if "cancel scope" not in str(e):
+                    raise
+            except Exception as e:
+                # Log but don't raise other exceptions during cleanup
+                print(f"Warning: Error during disconnect of '{self.name}': {e}")
+            finally:
+                self.exit_stack = None
+                self.session = None
 
 
 # Global connections registry
@@ -157,10 +249,30 @@ async def load_mcp_tools_async(config_path: str = "mcp.json") -> list[Tool]:
 
     This function:
     1. Reads the MCP config file
-    2. Starts MCP server processes
+    2. Starts MCP server processes or connects to remote servers
     3. Connects to each server
     4. Fetches tool definitions
     5. Wraps them as Tool objects
+
+    Supported transport types:
+    - stdio: Local process communication (command-based)
+    - sse: Server-Sent Events (URL-based)
+    - websocket: WebSocket connection (URL-based)
+
+    Config format:
+    {
+      "mcpServers": {
+        "server-name": {
+          "transport": "stdio|sse|websocket",
+          "command": "...",      // for stdio
+          "args": [...],         // for stdio
+          "env": {...},          // for stdio
+          "url": "...",          // for sse/websocket
+          "headers": {...},      // for sse/websocket (optional)
+          "disabled": false      // optional
+        }
+      }
+    }
 
     Args:
         config_path: Path to MCP configuration file (default: "mcp.json")
@@ -194,15 +306,34 @@ async def load_mcp_tools_async(config_path: str = "mcp.json") -> list[Tool]:
                 print(f"Skipping disabled server: {server_name}")
                 continue
 
+            # Detect transport type (default to stdio for backward compatibility)
+            transport = server_config.get("transport", "stdio")
+            
+            # Extract configuration based on transport type
             command = server_config.get("command")
             args = server_config.get("args", [])
             env = server_config.get("env", {})
+            url = server_config.get("url")
+            headers = server_config.get("headers", {})
 
-            if not command:
-                print(f"No command specified for server: {server_name}")
+            # Validate required fields
+            if transport == "stdio" and not command:
+                print(f"⚠️  No command specified for stdio server: {server_name}")
+                continue
+            
+            if transport in ["sse", "websocket", "ws"] and not url:
+                print(f"⚠️  No URL specified for {transport} server: {server_name}")
                 continue
 
-            connection = MCPServerConnection(server_name, command, args, env)
+            connection = MCPServerConnection(
+                name=server_name,
+                transport=transport,
+                command=command,
+                args=args,
+                env=env,
+                url=url,
+                headers=headers,
+            )
             success = await connection.connect()
 
             if success:
@@ -223,6 +354,19 @@ async def load_mcp_tools_async(config_path: str = "mcp.json") -> list[Tool]:
 async def cleanup_mcp_connections():
     """Clean up all MCP connections."""
     global _mcp_connections
+    
+    # Disconnect all connections, catching any errors
+    errors = []
     for connection in _mcp_connections:
-        await connection.disconnect()
+        try:
+            await connection.disconnect()
+        except Exception as e:
+            errors.append(f"{connection.name}: {e}")
+    
     _mcp_connections.clear()
+    
+    # Report errors if any (but don't raise)
+    if errors:
+        print(f"⚠️  Some connections had errors during cleanup:")
+        for error in errors:
+            print(f"   - {error}")

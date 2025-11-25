@@ -1,0 +1,19 @@
+{
+  "alert_id": "ALR-2025-001236",
+  "timestamp": "2025-11-25T12:00:00Z",
+  "severity": "low",
+  "attacker_ip": "203.0.113.45",
+  "victim_ip": "10.0.3.25",
+  "attack_type": "failed_authentication",
+  "payload": "Multiple failed login attempts with username: testuser",
+  "protocol": "HTTPS",
+  "destination_port": 443,
+  "source_port": 51234,
+  "additional_context": {
+    "failed_attempts": 3,
+    "username": "testuser",
+    "time_window": "5 minutes",
+    "authentication_method": "password"
+  },
+  "description": "检测到少量失败的登录尝试"
+}
